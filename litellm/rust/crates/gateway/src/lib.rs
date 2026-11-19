@@ -79,11 +79,13 @@ pub fn install_crypto_provider() {
 }
 
 pub fn router(state: AppState, config: &Config) -> Router {
-    let inference = litellm_gateway_inference::router(state.inference.clone()).route_layer(
-        axum::middleware::from_fn_with_state(
-            state.auth(config),
-            litellm_gateway_auth::authenticate,
-        ),
-    );
+    let inference = middleware::rate_limited(
+        litellm_gateway_inference::router(state.inference.clone()),
+        state.rate_limit.clone(),
+    )
+    .route_layer(axum::middleware::from_fn_with_state(
+        state.auth(config),
+        litellm_gateway_auth::authenticate,
+    ));
     middleware::inference(inference).merge(health::router(state))
 }

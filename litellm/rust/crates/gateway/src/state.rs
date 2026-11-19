@@ -9,7 +9,10 @@ use litellm_license::Entitlements;
 use litellm_repositories::KeyRepository;
 
 use crate::{
-    Error, Gateway, RedisClients, Resources, db, keys::StoredKeys, license::build_license,
+    Error, Gateway, RedisClients, Resources, db,
+    keys::StoredKeys,
+    license::build_license,
+    middleware::rate_limit::{self, RateLimit},
 };
 
 #[derive(Clone)]
@@ -20,6 +23,8 @@ pub struct AppState {
     /// The virtual keys of the proxy's database. `None` without a database.
     pub keys: Option<Arc<dyn KeyLookup>>,
     pub entitlements: Arc<Entitlements>,
+    /// The proxy's `parallel_request_limiter_v3`, over the coordination Redis.
+    pub rate_limit: Arc<RateLimit>,
     /// The config's `environment_variables` in front of the process environment.
     pub environment: Arc<dyn Lookup + Send + Sync>,
 }
@@ -46,12 +51,17 @@ impl AppState {
             })
             .unzip();
         let entitlements = Arc::new(build_license(config, environment, resources).await);
+        let rate_limit = Arc::new(RateLimit::new(
+            rate_limit::Settings::from_environment(environment),
+            redis.coordination.clone(),
+        ));
         Ok(Self {
             inference,
             redis,
             database,
             keys,
             entitlements,
+            rate_limit,
             environment: resources.environment.clone(),
         })
     }

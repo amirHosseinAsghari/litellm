@@ -10,7 +10,7 @@ use crate::{
     AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
     Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
     ResolvedIdentity, VerifiedIdentity,
-    keys::{KeyHash, KeyLookup, KeyStatus},
+    keys::{KeyHash, KeyLimits, KeyLookup, KeyStatus},
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -289,7 +289,7 @@ impl Authenticator for KeyAuthenticator {
             }
             let hash = KeyHash::from_token(token);
             match self.keys.lookup(&hash).await? {
-                Some(KeyStatus::Active { expires_at }) => Ok(VerifiedIdentity {
+                Some(KeyStatus::Active { expires_at, limits }) => Ok(VerifiedIdentity {
                     principal: Principal::new(
                         VIRTUAL_KEY.into(),
                         hash.as_str().into(),
@@ -300,6 +300,7 @@ impl Authenticator for KeyAuthenticator {
                         verifier: VIRTUAL_KEY.into(),
                         credential_id: hash.as_str().into(),
                         expires_at,
+                        limits,
                     },
                     restrictions: Permissions::All,
                 }),
@@ -317,6 +318,7 @@ fn master_identity() -> VerifiedIdentity {
             verifier: "litellm:master-key".into(),
             credential_id: "master".into(),
             expires_at: None,
+            limits: KeyLimits::default(),
         },
         restrictions: Permissions::All,
     }

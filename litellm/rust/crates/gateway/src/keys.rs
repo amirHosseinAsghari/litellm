@@ -1,7 +1,8 @@
 //! The virtual keys the native app authenticates, read from the proxy's database on every request.
 //!
-//! The native app honors a key's expiry and its block and nothing else a key can carry, so it
-//! only authenticates a key that carries nothing else. Each column of the key's row is taken apart
+//! The native app honors a key's expiry, its block, its `rpm_limit` and its
+//! `max_parallel_requests` and nothing else a key can carry, so it only authenticates a key that
+//! carries nothing else. Each column of the key's row is taken apart
 //! by name, so a column added to the row does not compile here until it is honored or named.
 
 use std::time::SystemTime;
@@ -10,7 +11,7 @@ use chrono::NaiveDateTime;
 use litellm_error::Source;
 use litellm_gateway_auth::{
     Error,
-    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture},
+    keys::{KeyHash, KeyLimits, KeyLookup, KeyStatus, LookupFuture},
 };
 use litellm_repositories::{KeyRepository, KeyView, RawJson, Side};
 
@@ -104,6 +105,8 @@ fn carried(key: &KeyView) -> Option<&'static str> {
         organization_rpm_limit: _,
         organization_metadata: _,
         project_alias: _,
+        max_parallel_requests: _,
+        rpm_limit: _,
         key_type,
         soft_budget_cooldown,
         models,
@@ -116,10 +119,8 @@ fn carried(key: &KeyView) -> Option<&'static str> {
         project_id,
         org_id,
         permissions,
-        max_parallel_requests,
         metadata,
         tpm_limit,
-        rpm_limit,
         tpd_limit,
         max_budget,
         soft_budget,
@@ -156,10 +157,8 @@ fn carried(key: &KeyView) -> Option<&'static str> {
             project_id,
             org_id,
             permissions,
-            max_parallel_requests,
             metadata,
             tpm_limit,
-            rpm_limit,
             tpd_limit,
             max_budget,
             soft_budget,
@@ -187,6 +186,10 @@ fn status(key: &KeyView) -> Result<KeyStatus, &'static str> {
         Some(column) => Err(column),
         None => Ok(KeyStatus::Active {
             expires_at: key.expires.map(|at| SystemTime::from(at.and_utc())),
+            limits: KeyLimits {
+                rpm: key.rpm_limit,
+                max_parallel_requests: key.max_parallel_requests.map(i64::from),
+            },
         }),
     }
 }
@@ -339,6 +342,33 @@ mod tests {
             Ok(KeyStatus::Active {
                 expires_at: expires_at
                     .map(|second| SystemTime::UNIX_EPOCH + Duration::from_secs(second)),
+                limits: KeyLimits::default(),
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::rpm(Some(2), None)]
+    #[case::parallel(None, Some(1))]
+    #[case::both_and_zero(Some(0), Some(0))]
+    fn a_keys_rpm_limit_and_max_parallel_requests_are_its_limits(
+        #[case] rpm: Option<i64>,
+        #[case] max_parallel_requests: Option<i32>,
+    ) {
+        let key = KeyView {
+            rpm_limit: rpm,
+            max_parallel_requests,
+            ..plain()
+        };
+
+        assert_eq!(
+            status(&key),
+            Ok(KeyStatus::Active {
+                expires_at: None,
+                limits: KeyLimits {
+                    rpm,
+                    max_parallel_requests: max_parallel_requests.map(i64::from),
+                },
             })
         );
     }
@@ -368,11 +398,9 @@ mod tests {
     #[case::project_id(|key: &mut KeyView| key.project_id = Some("project".to_owned()), "project_id")]
     #[case::org_id(|key: &mut KeyView| key.org_id = Some("org".to_owned()), "org_id")]
     #[case::permissions(|key: &mut KeyView| key.permissions = json(r#"{"a":true}"#), "permissions")]
-    #[case::max_parallel_requests(|key: &mut KeyView| key.max_parallel_requests = Some(1), "max_parallel_requests")]
     #[case::metadata(|key: &mut KeyView| key.metadata = json(r#"{"guardrails":["pii"]}"#), "metadata")]
     #[case::tpm_limit(|key: &mut KeyView| key.tpm_limit = Some(1), "tpm_limit")]
-    #[case::rpm_limit(|key: &mut KeyView| key.rpm_limit = Some(1), "rpm_limit")]
-    #[case::a_limit_of_zero(|key: &mut KeyView| key.rpm_limit = Some(0), "rpm_limit")]
+    #[case::a_limit_of_zero(|key: &mut KeyView| key.tpm_limit = Some(0), "tpm_limit")]
     #[case::tpd_limit(|key: &mut KeyView| key.tpd_limit = Some(1), "tpd_limit")]
     #[case::max_budget(|key: &mut KeyView| key.max_budget = Some(5.0), "max_budget")]
     #[case::soft_budget(|key: &mut KeyView| key.soft_budget = Some(5.0), "soft_budget")]

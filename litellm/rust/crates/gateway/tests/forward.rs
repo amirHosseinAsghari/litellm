@@ -86,6 +86,10 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 database: None,
                 keys: None,
                 entitlements: Arc::new(Entitlements::Community),
+                rate_limit: Arc::new(litellm_gateway::middleware::rate_limit::RateLimit::new(
+                    litellm_gateway::middleware::rate_limit::Settings::default(),
+                    None,
+                )),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
             },
             &config,

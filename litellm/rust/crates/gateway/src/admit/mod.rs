@@ -168,7 +168,7 @@ impl Admit {
 mod tests {
     use litellm_gateway_auth::{
         BearerOrXApiKey,
-        keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture},
+        keys::{KeyHash, KeyLimits, KeyLookup, KeyStatus, LookupFuture},
     };
     use litellm_secret_value::SecretValue;
     use rstest::rstest;
@@ -196,7 +196,10 @@ mod tests {
                     return Ok(None);
                 }
                 match self {
-                    Self::Active => Ok(Some(KeyStatus::Active { expires_at: None })),
+                    Self::Active => Ok(Some(KeyStatus::Active {
+                        expires_at: None,
+                        limits: KeyLimits::default(),
+                    })),
                     Self::Revoked => Ok(Some(KeyStatus::Revoked)),
                     Self::Restricted => Err(litellm_gateway_auth::Error::Forbidden),
                     Self::Unreachable => Err(litellm_gateway_auth::Error::Unavailable(

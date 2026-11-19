@@ -32,7 +32,9 @@
 
 ## Keys
 - With a database, `AppState::auth` authenticates the master key and a virtual key, in both modes. `StoredKeys` (`src/keys.rs`) reads the key's row from Postgres on every request, with no cache in front of it
-- The native app honors a key's expiry and its block and nothing else. `carried` takes the row apart column by column, and a key that holds anything else (a team, an owner, a budget, a limit, a model list, metadata) is `Forbidden`, which `admit` leaves to Python as `credential`. A column added to the row does not compile until it is honored or named
+- The native app honors a key's expiry, its block, its `rpm_limit` and its `max_parallel_requests` and nothing else. `carried` takes the row apart column by column, and a key that holds anything else (a team, an owner, a budget, another limit, a model list, metadata) is `Forbidden`, which `admit` leaves to Python as `credential`. A column added to the row does not compile until it is honored or named
+- The key's limits ride on its `Authentication` as `KeyLimits`, and `middleware::rate_limit` enforces them with the proxy's `parallel_request_limiter_v3` from `litellm-callbacks-parallel-request-limiter`, over the coordination Redis or this process's memory. It is a route layer inside `authenticate`, so it sees the caller and only matched inference routes. The master key and a key without limits are never counted, as Python builds no descriptor for them
+- Not ported yet: counting the tokens a call used once it ends, which only a TPM limit reads. A key with `tpm_limit` stays with Python until it is
 - Honoring a column natively moves it out of `carried` in the same change. Never report a key active while a column it holds is not enforced
 - `admit` and the route's `authenticate` layer each check the caller, so an admitted virtual key costs two reads
 

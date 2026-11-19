@@ -6,7 +6,10 @@ use std::{
 use axum::{body::Body, http::Request};
 use litellm_config::Config;
 use litellm_db::{Endpoint, PoolLimits, Pools, SslMode};
-use litellm_gateway::{AppState, Gateway, RedisClients, Resources};
+use litellm_gateway::{
+    AppState, Gateway, RedisClients, Resources,
+    middleware::rate_limit::{self, RateLimit},
+};
 use litellm_gateway_inference::Error;
 use litellm_http::ClientVariant;
 use litellm_license::Entitlements;
@@ -62,6 +65,7 @@ fn without_stores(inference: Arc<Gateway>) -> AppState {
         database: None,
         keys: None,
         entitlements: Arc::new(Entitlements::Community),
+        rate_limit: Arc::new(RateLimit::new(rate_limit::Settings::default(), None)),
         environment: Arc::new(litellm_env::ProcessEnvironment),
     }
 }

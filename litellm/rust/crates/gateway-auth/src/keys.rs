@@ -17,9 +17,19 @@ impl KeyHash {
     }
 }
 
+/// The request limits a virtual key holds, which the server enforces after authentication.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KeyLimits {
+    pub rpm: Option<i64>,
+    pub max_parallel_requests: Option<i64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KeyStatus {
-    Active { expires_at: Option<SystemTime> },
+    Active {
+        expires_at: Option<SystemTime>,
+        limits: KeyLimits,
+    },
     Revoked,
 }
 
