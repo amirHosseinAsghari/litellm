@@ -1,5 +1,4 @@
-# A database the config's own environment variables name sends everything to Python, since the
-# proxy reads keys, spend and settings from it.
+# A database alone keeps a request native: the master key is checked before any key is read.
 config:
   model_list:
     - model_name: claude
@@ -15,4 +14,4 @@ requests:
   - name: plain
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: settings
+    expect: native

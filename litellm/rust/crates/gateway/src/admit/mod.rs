@@ -13,7 +13,6 @@ use std::sync::Arc;
 use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_env::Lookup;
 use litellm_gateway_auth::{Auth, BearerOrXApiKey};
 use litellm_gateway_inference::JsonObject;
 use litellm_router_core::registry::DeploymentFilter;
@@ -62,8 +61,9 @@ pub struct Admit {
     config: Config,
     /// The variables only the environment holds, as `main` read them.
     environment: Environment,
-    /// What gives the proxy a database, which it reads keys, spend and settings from.
-    database: Option<Box<str>>,
+    /// The variable that turns the proxy's `store_model_in_db` on, which reads models and settings
+    /// from its database.
+    stored_models: Option<Box<str>>,
     /// Each deployment the router built from `config`, since only the router knows which provider
     /// serves each one.
     deployed: Vec<Deployed>,
@@ -72,27 +72,7 @@ pub struct Admit {
     auth: Auth,
 }
 
-/// The variables the proxy builds a database from when `database_url` names none.
-const DATABASE_VARIABLES: [&str; 4] = [
-    "DATABASE_URL",
-    "DATABASE_HOST",
-    "IAM_TOKEN_DB_AUTH",
-    "AZURE_POSTGRESQL_AUTH",
-];
-
-fn database(config: &Config, environment: &dyn Lookup) -> Option<Box<str>> {
-    config
-        .general_settings
-        .database_url
-        .as_ref()
-        .map(|_| "general_settings.database_url".into())
-        .or_else(|| {
-            DATABASE_VARIABLES
-                .into_iter()
-                .find(|variable| environment.get(variable).is_some())
-                .map(Box::from)
-        })
-}
+const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Refused) {
     tracing::debug!(why = %reason.why, over = %reason.over, "python answers a request over this");
@@ -121,7 +101,11 @@ impl Admit {
             .collect();
         Self {
             environment: environment.clone(),
-            database: database(config, &*state.environment),
+            stored_models: state
+                .environment
+                .get(STORE_MODEL_IN_DB)
+                .map(|_| STORE_MODEL_IN_DB.into()),
+            auth: state.auth(config),
             ..Self::over(config, deployed)
         }
     }
@@ -138,7 +122,7 @@ impl Admit {
             auth: Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey)),
             config: config.clone(),
             environment: Environment::default(),
-            database: None,
+            stored_models: None,
             deployed,
         }
     }
@@ -182,6 +166,8 @@ impl Admit {
 #[cfg(test)]
 mod tests {
     use axum::http::Method;
+    use litellm_gateway_auth::keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture};
+    use litellm_secret_value::SecretValue;
     use rstest::rstest;
 
     use super::*;
@@ -196,6 +182,77 @@ mod tests {
             ("gpt".to_owned(), Ok(LlmProviders::Openai)),
         ];
         Arc::new(Admit::over(&config, deployed))
+    }
+
+    const VIRTUAL_KEY: (&str, &str) = ("authorization", "Bearer sk-virtual");
+
+    /// What the database answers for the hash of [`VIRTUAL_KEY`], and nothing for any other.
+    #[derive(Clone, Copy)]
+    enum Held {
+        Active,
+        Revoked,
+        Restricted,
+        Unreachable,
+    }
+
+    impl KeyLookup for Held {
+        fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a> {
+            Box::pin(async move {
+                if hash != &KeyHash::from_token(&SecretValue::new("sk-virtual")) {
+                    return Ok(None);
+                }
+                match self {
+                    Self::Active => Ok(Some(KeyStatus::Active { expires_at: None })),
+                    Self::Revoked => Ok(Some(KeyStatus::Revoked)),
+                    Self::Restricted => Err(litellm_gateway_auth::Error::Forbidden),
+                    Self::Unreachable => Err(litellm_gateway_auth::Error::Unavailable(
+                        litellm_error::Source::new(std::io::Error::other("database down")),
+                    )),
+                }
+            })
+        }
+    }
+
+    fn holding(held: Held) -> Arc<Admit> {
+        let config = Config::from_yaml(CONFIG).unwrap();
+        Arc::new(Admit {
+            auth: Auth::with_keys(&config, Arc::new(held))
+                .with_extractor(Arc::new(BearerOrXApiKey)),
+            ..Admit::over(
+                &config,
+                vec![("claude".to_owned(), Ok(LlmProviders::Anthropic))],
+            )
+        })
+    }
+
+    async fn refusal(admit: Arc<Admit>, request: Request) -> Option<Refused> {
+        admit.admit(request).await.err().map(|(_, why)| why)
+    }
+
+    #[rstest]
+    #[case::active(Held::Active, VIRTUAL_KEY, None)]
+    #[case::revoked(Held::Revoked, VIRTUAL_KEY, Some(Refused::Credential))]
+    #[case::holding_what_the_native_app_does_not_honor(
+        Held::Restricted,
+        VIRTUAL_KEY,
+        Some(Refused::Credential)
+    )]
+    #[case::unreadable(Held::Unreachable, VIRTUAL_KEY, Some(Refused::Credential))]
+    #[case::unknown(
+        Held::Active,
+        ("authorization", "Bearer sk-someone-else"),
+        Some(Refused::Credential)
+    )]
+    #[tokio::test]
+    async fn a_virtual_key_is_admitted_only_when_the_native_app_authenticates_it(
+        #[case] held: Held,
+        #[case] credential: (&str, &str),
+        #[case] why: Option<Refused>,
+    ) {
+        assert_eq!(
+            refusal(holding(held), messages(&[credential], "claude")).await,
+            why
+        );
     }
 
     fn messages(headers: &[(&str, &str)], model: &str) -> Request {

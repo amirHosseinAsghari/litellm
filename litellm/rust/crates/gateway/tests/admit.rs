@@ -65,6 +65,7 @@ impl Sent {
 #[case::unread_fallbacks("unread_fallbacks")]
 #[case::drop_params_set("drop_params_set")]
 #[case::database("database")]
+#[case::store_model_in_db("store_model_in_db")]
 #[tokio::test]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
